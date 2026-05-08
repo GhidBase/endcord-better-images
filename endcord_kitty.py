@@ -277,8 +277,6 @@ class Extension:
         app.tui.update_chat(app.chat, app.chat_format)
 
     def _app_add_pending_message(self, content, nonce, reply_id=None, attachments=None, stickers=None):
-        import os as _os
-        import time as _time
         from endcord import formatter
         app = self.app
 
@@ -291,7 +289,7 @@ class Extension:
         embeds = []
         if attachments:
             for attachment in attachments:
-                ext = _os.path.splitext(attachment["name"])[1].lower()
+                ext = os.path.splitext(attachment["name"])[1].lower()
                 embed_type = f"image/{ext[1:]}" if ext in _IMAGE_EXTS else "unknown"
                 embeds.append({
                     "type": embed_type,
@@ -310,7 +308,7 @@ class Extension:
             else:
                 referenced_message = {
                     "id": reply_id,
-                    "timestamp": formatter.discord_timestamp(_time.time()),
+                    "timestamp": formatter.discord_timestamp(time.time()),
                     "content": "Unknown content",
                     "mentions": [],
                     "user_id": "-1000",
@@ -333,7 +331,7 @@ class Extension:
             "id": nonce,
             "channel_id": app.active_channel["channel_id"],
             "guild_id": app.active_channel["guild_id"],
-            "timestamp": formatter.discord_timestamp(_time.time()),
+            "timestamp": formatter.discord_timestamp(time.time()),
             "edited": False,
             "content": content,
             "mentions": [],
