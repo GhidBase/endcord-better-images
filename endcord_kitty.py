@@ -18,7 +18,8 @@ EXT_SOURCE = "https://github.com/ghidbase/endcord-kitty"
 
 logger = logging.getLogger(__name__)
 
-_IMAGE_ROWS = 10   # rows reserved per inline image (must match cap in _render_overlay)
+_IMAGE_ROWS = 20    # max rows reserved per inline image (must match cap in _render_overlay)
+_IMAGE_MAX_COLS = 40  # max terminal columns an image may occupy
 
 
 class Extension:
@@ -115,10 +116,10 @@ class Extension:
                 if result is None:
                     continue
                 payload, img_w, img_h = result
-                cols = min(max(4, chat_w // 2), 20)
+                cols = min(max(4, chat_w // 2), _IMAGE_MAX_COLS)
                 aspect = (img_w / img_h) if img_h else 1.0
                 rows = max(2, round(cols / aspect / 2))
-                rows = min(rows, 9, available_rows)
+                rows = min(rows, _IMAGE_ROWS - 1, available_rows)
                 parts.append(self._tu.kitty_place_str(chat_begy + img_y, chat_begx + chat_x, payload, cols=cols, rows=rows))
             for (abs_row, abs_col, emoji_id) in tui.extra_emoji_positions:
                 payload = self._ec.get_payload(emoji_id, on_ready=tui.on_image_ready)
@@ -186,7 +187,7 @@ class Extension:
                     cached = self._ic.get_payload(img_url, on_ready=app.tui.on_image_ready) if img_url else None
                     if cached:
                         _, img_w, img_h = cached
-                        cols = min(max(4, app.chat_dim[1] // 2), 20)
+                        cols = min(max(4, app.chat_dim[1] // 2), _IMAGE_MAX_COLS)
                         aspect = (img_w / img_h) if img_h else 1.0
                         n = min(max(2, round(cols / aspect / 2)), _IMAGE_ROWS - 1)
                     else:
