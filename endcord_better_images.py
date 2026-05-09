@@ -85,12 +85,27 @@ class Extension:
             return
 
         tui = app.tui
+        # In the compiled binary, screen_update doesn't call _render_emoji_overlay
+        # and none of the image/emoji tui attributes exist — detect this and compensate.
+        self._needs_overlay_thread = '_render_emoji_overlay' not in type(tui).__dict__
+
         tui.use_kitty_emoji = True
         tui._on_image_ready = self._tui_on_image_ready
         tui.on_image_ready = self._tui_on_image_ready
         tui._render_emoji_overlay = self._tui_render_overlay
         tui.set_wide = self._tui_set_wide
         tui._kitty_skip = set()
+
+        # Initialize attributes absent from the compiled binary
+        for _attr, _default in [
+            ('image_map', []), ('image_positions', []),
+            ('emoji_positions', []), ('emoji_map', []),
+            ('extra_emoji_positions', []), ('_last_overlay_key', None),
+        ]:
+            if not hasattr(tui, _attr):
+                setattr(tui, _attr, _default)
+        if not hasattr(tui, 'set_images'):
+            tui.set_images = lambda m, _t=tui: setattr(_t, 'image_map', m)
 
         app._IMAGE_ROWS = _IMAGE_ROWS
         app._insert_jumbo_placeholders = self._app_insert_jumbo
@@ -111,7 +126,7 @@ class Extension:
         tui.need_update.set()
 
     def on_main_start(self):
-        """Wrap common_keybindings once after all extensions are loaded to apply skip."""
+        """Wrap common_keybindings; start overlay thread if running in compiled binary."""
         if getattr(self, '_skip_wrap_done', False):
             return
         self._skip_wrap_done = True
@@ -123,6 +138,51 @@ class Extension:
             ext._apply_skip(key)
             return result
         tui.common_keybindings = _wrapped
+
+        if self._needs_overlay_thread:
+            self._start_overlay_thread()
+
+    def _start_overlay_thread(self):
+        """For the compiled binary: hook need_update and run our own overlay render thread."""
+        import threading
+        tui = self.app.tui
+        _overlay_event = threading.Event()
+        _orig_set = tui.need_update.set
+
+        def _hooked_set():
+            _orig_set()
+            _overlay_event.set()
+        tui.need_update.set = _hooked_set
+
+        # Wrap draw_chat to compute image_positions from image_map after each draw
+        _prev_draw = tui.draw_chat
+        ext = self
+
+        def _wrapped_draw(*args, **kwargs):
+            result = _prev_draw(*args, **kwargs)
+            image_map = tui.image_map
+            if image_map:
+                h = tui.chat_hw[0]
+                positions = []
+                for num in range(h):
+                    buf_idx = tui.chat_index + num
+                    if buf_idx < len(image_map) and image_map[buf_idx]:
+                        positions.append((h - 1 - num, 0, image_map[buf_idx]))
+                tui.image_positions = positions
+            else:
+                tui.image_positions = []
+            return result
+        tui.draw_chat = _wrapped_draw
+
+        delay = getattr(tui, 'screen_update_delay', 0.01) + 0.005
+
+        def _overlay_loop():
+            while True:
+                _overlay_event.wait()
+                _overlay_event.clear()
+                time.sleep(delay)
+                ext._tui_render_overlay()
+        threading.Thread(target=_overlay_loop, daemon=True).start()
 
     def _apply_skip(self, key):
         tui = self.app.tui
