@@ -22,6 +22,48 @@ _IMAGE_ROWS = 20    # max rows reserved per inline image (must match cap in _ren
 _IMAGE_MAX_COLS = 40  # max terminal columns an image may occupy
 
 
+def _detect_kitty_graphics():
+    if os.environ.get("KITTY_WINDOW_ID"):
+        return True
+    term_program = os.environ.get("TERM_PROGRAM", "").lower()
+    if term_program in ("ghostty", "kitty", "wezterm"):
+        return True
+    if "kitty" in os.environ.get("TERM", "").lower():
+        return True
+    return False
+
+
+def _get_pixel_size():
+    try:
+        import fcntl
+        import struct
+        import termios
+        buf = struct.pack("HHHH", 0, 0, 0, 0)
+        buf = fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, buf)
+        _rows, _cols, xpx, ypx = struct.unpack("HHHH", buf)
+        if xpx and ypx:
+            return xpx, ypx
+    except Exception:
+        pass
+    return None
+
+
+def _kitty_place_str(term_row, term_col, payload_b64, cols=2, rows=1):
+    chunk_size = 4096
+    chunks = [payload_b64[i:i + chunk_size] for i in range(0, len(payload_b64), chunk_size)]
+    if not chunks:
+        return ""
+    out = f"\x1b[{term_row + 1};{term_col + 1}H"
+    if len(chunks) == 1:
+        out += f"\x1b_Ga=T,f=100,c={cols},r={rows},q=2,C=1,m=0;{chunks[0]}\x1b\\"
+    else:
+        out += f"\x1b_Ga=T,f=100,c={cols},r={rows},q=2,C=1,m=1;{chunks[0]}\x1b\\"
+        for chunk in chunks[1:-1]:
+            out += f"\x1b_Gm=1,q=2;{chunk}\x1b\\"
+        out += f"\x1b_Gm=0,q=2;{chunks[-1]}\x1b\\"
+    return out
+
+
 class Extension:
     def __init__(self, app):
         self.app = app
@@ -38,7 +80,7 @@ class Extension:
         self._ic = _ic
         self._ec = _ec
 
-        if not _tu.detect_kitty_graphics():
+        if not _detect_kitty_graphics():
             logger.info("Kitty graphics protocol not detected — extension inactive")
             return
 
@@ -131,7 +173,7 @@ class Extension:
         tui._last_overlay_key = overlay_key
         parts = ["\x1b_Ga=d,d=A,q=2\x1b\\"]
         if tui.emoji_positions or tui.image_positions or tui.extra_emoji_positions:
-            px = self._tu.get_pixel_size()
+            px = _get_pixel_size()
             th, tw = self._tu.get_size()
             if px and th and tw:
                 cell_aspect = (px[1] / th) / (px[0] / tw)
@@ -144,9 +186,9 @@ class Extension:
                 if payload is None:
                     continue
                 if is_jumbo and chat_y + 1 < chat_h:
-                    parts.append(self._tu.kitty_place_str(chat_begy + chat_y, chat_begx + chat_x, payload, cols=jumbo_cols, rows=jumbo_rows))
+                    parts.append(_kitty_place_str(chat_begy + chat_y, chat_begx + chat_x, payload, cols=jumbo_cols, rows=jumbo_rows))
                 else:
-                    parts.append(self._tu.kitty_place_str(chat_begy + chat_y, chat_begx + chat_x, payload))
+                    parts.append(_kitty_place_str(chat_begy + chat_y, chat_begx + chat_x, payload))
             for (chat_y, chat_x, url) in tui.image_positions:
                 img_y = chat_y + 1
                 available_rows = chat_h - img_y
@@ -160,12 +202,12 @@ class Extension:
                 aspect = (img_w / img_h) if img_h else 1.0
                 rows = max(2, round(cols / aspect / cell_aspect))
                 rows = min(rows, _IMAGE_ROWS - 1, available_rows)
-                parts.append(self._tu.kitty_place_str(chat_begy + img_y, chat_begx + chat_x, payload, cols=cols, rows=rows))
+                parts.append(_kitty_place_str(chat_begy + img_y, chat_begx + chat_x, payload, cols=cols, rows=rows))
             for (abs_row, abs_col, emoji_id) in tui.extra_emoji_positions:
                 payload = self._ec.get_payload(emoji_id, on_ready=tui.on_image_ready)
                 if payload is None:
                     continue
-                parts.append(self._tu.kitty_place_str(abs_row, abs_col, payload))
+                parts.append(_kitty_place_str(abs_row, abs_col, payload))
         out = "\x1b7" + "".join(parts) + "\x1b8"
         os.write(sys.stdout.fileno(), out.encode())
 
@@ -232,7 +274,7 @@ class Extension:
                     cached = self._ic.get_payload(img_url, on_ready=app.tui.on_image_ready) if img_url else None
                     if cached:
                         _, img_w, img_h = cached
-                        px = self._tu.get_pixel_size()
+                        px = _get_pixel_size()
                         th, tw_term = self._tu.get_size()
                         cell_aspect = ((px[1] / th) / (px[0] / tw_term)) if (px and th and tw_term) else 2.0
                         cols = min(max(4, app.chat_dim[1] // 2), _IMAGE_MAX_COLS)
