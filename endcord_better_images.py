@@ -169,12 +169,10 @@ class Extension:
             image_map = tui.image_map
             img_positions = []
             if image_map:
+                content_x = getattr(self.app.formatter, 'newline_len', 0)
                 for num in range(h):
                     buf_idx = tui.chat_index + num
                     if buf_idx < len(image_map) and image_map[buf_idx]:
-                        line = tui.chat_buffer[buf_idx] if buf_idx < len(tui.chat_buffer) else ""
-                        sep = line.find(" | ")
-                        content_x = sep + 3 if sep >= 0 else 0
                         img_positions.append((h - 1 - num, content_x, image_map[buf_idx]))
             tui.image_positions = img_positions
 
