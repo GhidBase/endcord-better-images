@@ -10,11 +10,11 @@ import os
 import sys
 import time
 
-EXT_NAME = "Kitty Graphics"
+EXT_NAME = "Better Images"
 EXT_VERSION = "0.1.0"
 EXT_ENDCORD_VERSION = "1.4.2"
 EXT_DESCRIPTION = "Inline image and custom emoji rendering via the Kitty terminal graphics protocol. Supports Kitty, Ghostty, and WezTerm."
-EXT_SOURCE = "https://github.com/ghidbase/endcord-kitty"
+EXT_SOURCE = "https://github.com/ghidbase/endcord-better-images"
 
 logger = logging.getLogger(__name__)
 
