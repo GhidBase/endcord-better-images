@@ -154,23 +154,47 @@ class Extension:
             _overlay_event.set()
         tui.need_update.set = _hooked_set
 
-        # Wrap draw_chat to compute image_positions from image_map after each draw
+        # Wrap draw_chat to compute image_positions and emoji_positions after each draw
+        import unicodedata
+        def _char_w(ch):
+            return 2 if unicodedata.east_asian_width(chr(ch)) in ('W', 'F') else 1
+
         _prev_draw = tui.draw_chat
-        ext = self
 
         def _wrapped_draw(*args, **kwargs):
             result = _prev_draw(*args, **kwargs)
+            h = tui.chat_hw[0]
+
             image_map = tui.image_map
+            img_positions = []
             if image_map:
-                h = tui.chat_hw[0]
-                positions = []
                 for num in range(h):
                     buf_idx = tui.chat_index + num
                     if buf_idx < len(image_map) and image_map[buf_idx]:
-                        positions.append((h - 1 - num, 0, image_map[buf_idx]))
-                tui.image_positions = positions
-            else:
-                tui.image_positions = []
+                        img_positions.append((h - 1 - num, 0, image_map[buf_idx]))
+            tui.image_positions = img_positions
+
+            emoji_map = tui.emoji_map
+            em_positions = []
+            if emoji_map:
+                for num in range(h):
+                    buf_idx = tui.chat_index + num
+                    if buf_idx >= len(emoji_map):
+                        break
+                    emoji_ranges = emoji_map[buf_idx]
+                    if not emoji_ranges:
+                        continue
+                    y = h - 1 - num
+                    line = tui.chat_buffer[buf_idx] if buf_idx < len(tui.chat_buffer) else ""
+                    screen_x = 0
+                    pos = 0
+                    for er in sorted(emoji_ranges, key=lambda e: e[0]):
+                        while pos < er[0] and pos < len(line):
+                            screen_x += _char_w(ord(line[pos]))
+                            pos += 1
+                        em_positions.append((y, screen_x, er[2], len(er) > 3 and bool(er[3])))
+            tui.emoji_positions = em_positions
+
             return result
         tui.draw_chat = _wrapped_draw
 
