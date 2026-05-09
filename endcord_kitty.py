@@ -54,6 +54,7 @@ class Extension:
         app._build_image_map = self._app_build_image_map
         app.update_chat = self._app_update_chat
         app.add_pending_message = self._app_add_pending_message
+        app._kitty_chat_needs_update = False
 
         logger.info("Kitty graphics extension active")
 
@@ -62,7 +63,13 @@ class Extension:
     def _tui_on_image_ready(self):
         tui = self.app.tui
         tui._last_overlay_key = None
+        self.app._kitty_chat_needs_update = True
         tui.need_update.set()
+
+    def on_main_loop(self):
+        if self.app._kitty_chat_needs_update:
+            self.app._kitty_chat_needs_update = False
+            self.app.update_chat(keep_selected=True, scroll=False)
 
     def _tui_render_overlay(self):
         tui = self.app.tui
@@ -187,7 +194,7 @@ class Extension:
                     app.chat[i:i] = [""] * n
                     app.chat_format[i:i] = [[[0]]] * n
                     app.chat_map[i:i] = [None] * n
-                    i += _IMAGE_ROWS
+                    i += n + 1  # skip the blanks + the attachment line itself
                     continue
             i += 1
 
