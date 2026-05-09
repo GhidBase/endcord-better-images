@@ -48,6 +48,7 @@ class Extension:
         tui.on_image_ready = self._tui_on_image_ready
         tui._render_emoji_overlay = self._tui_render_overlay
         tui.set_wide = self._tui_set_wide
+        tui._kitty_skip = set()
 
         app._IMAGE_ROWS = _IMAGE_ROWS
         app._insert_jumbo_placeholders = self._app_insert_jumbo
@@ -66,6 +67,45 @@ class Extension:
         tui._last_overlay_key = None
         self.app._kitty_chat_needs_update = True
         tui.need_update.set()
+
+    def on_main_start(self):
+        """Wrap common_keybindings once after all extensions are loaded to apply skip."""
+        if getattr(self, '_skip_wrap_done', False):
+            return
+        self._skip_wrap_done = True
+        tui = self.app.tui
+        _prev = tui.common_keybindings
+        ext = self
+        def _wrapped(key, mouse=False, switch=False, command=False, forum=False):
+            result = _prev(key, mouse=mouse, switch=switch, command=command, forum=forum)
+            ext._apply_skip(key)
+            return result
+        tui.common_keybindings = _wrapped
+
+    def _apply_skip(self, key):
+        tui = self.app.tui
+        skip = tui._kitty_skip
+        if not skip:
+            return
+        if key in tui.KEYBINDINGS_CHAT_UP:
+            moved = False
+            while tui.chat_selected + 1 < len(tui.chat_buffer) and tui.chat_selected in skip:
+                top_line = tui.chat_index + tui.chat_hw[0] - 3
+                if top_line + 3 < len(tui.chat_buffer) and tui.chat_selected >= top_line:
+                    tui.chat_index += 1
+                tui.chat_selected += 1
+                moved = True
+            if moved:
+                tui.draw_chat()
+        elif key in tui.KEYBINDINGS_CHAT_DOWN:
+            moved = False
+            while tui.chat_selected >= tui.dont_hide_chat_selection and tui.chat_selected in skip:
+                if tui.chat_index and tui.chat_selected <= tui.chat_index + 2:
+                    tui.chat_index -= 1
+                tui.chat_selected -= 1
+                moved = True
+            if moved:
+                tui.draw_chat()
 
     def on_main_loop(self):
         if self.app._kitty_chat_needs_update:
@@ -118,7 +158,7 @@ class Extension:
                 payload, img_w, img_h = result
                 cols = min(max(4, chat_w // 2), _IMAGE_MAX_COLS)
                 aspect = (img_w / img_h) if img_h else 1.0
-                rows = max(2, round(cols / aspect / 2))
+                rows = max(2, round(cols / aspect / cell_aspect))
                 rows = min(rows, _IMAGE_ROWS - 1, available_rows)
                 parts.append(self._tu.kitty_place_str(chat_begy + img_y, chat_begx + chat_x, payload, cols=cols, rows=rows))
             for (abs_row, abs_col, emoji_id) in tui.extra_emoji_positions:
@@ -133,11 +173,16 @@ class Extension:
         """Update wide characters map and emoji overlay map."""
         tui = self.app.tui
         tui.wide_map = []
+        tui._kitty_skip = set()
         emoji_map = []
         for num, line in enumerate(chat_map):
-            if line and line[6]:
+            if line is None:
+                tui._kitty_skip.add(num)
+                emoji_map.append([])
+                continue
+            if line[6]:
                 tui.wide_map.append(num + 1)
-            if line and len(line) > 5 and line[5] and len(line[5]) > 2:
+            if len(line) > 5 and line[5] and len(line[5]) > 2:
                 is_jumbo = len(line[5]) > 5 and bool(line[5][5])
                 if is_jumbo:
                     emoji_map.append([[*r, True] for r in line[5][2]])
@@ -187,9 +232,12 @@ class Extension:
                     cached = self._ic.get_payload(img_url, on_ready=app.tui.on_image_ready) if img_url else None
                     if cached:
                         _, img_w, img_h = cached
+                        px = self._tu.get_pixel_size()
+                        th, tw_term = self._tu.get_size()
+                        cell_aspect = ((px[1] / th) / (px[0] / tw_term)) if (px and th and tw_term) else 2.0
                         cols = min(max(4, app.chat_dim[1] // 2), _IMAGE_MAX_COLS)
                         aspect = (img_w / img_h) if img_h else 1.0
-                        n = min(max(2, round(cols / aspect / 2)), _IMAGE_ROWS - 1)
+                        n = min(max(2, round(cols / aspect / cell_aspect)) + 1, _IMAGE_ROWS - 1)
                     else:
                         n = _IMAGE_ROWS - 1
                     app.chat[i:i] = [""] * n
