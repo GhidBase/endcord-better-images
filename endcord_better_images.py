@@ -205,7 +205,7 @@ class Extension:
                 _overlay_event.wait()
                 _overlay_event.clear()
                 time.sleep(delay)
-                ext._tui_render_overlay()
+                self._tui_render_overlay()
         threading.Thread(target=_overlay_loop, daemon=True).start()
 
     def _apply_skip(self, key):
