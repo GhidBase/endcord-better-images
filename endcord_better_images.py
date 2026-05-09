@@ -7,6 +7,7 @@
 
 import logging
 import os
+import re
 import sys
 import time
 
@@ -312,16 +313,31 @@ class Extension:
             if line[6]:
                 tui.wide_map.append(num + 1)
             if len(line) > 5 and line[5] and len(line[5]) > 2:
-                is_jumbo = len(line[5]) > 5 and bool(line[5][5])
-                if is_jumbo:
-                    emoji_map.append([[*r, True] for r in line[5][2]])
+                lr = line[5]
+                emoji_ranges_this_line = lr[2]
+                if len(lr) > 5:
+                    is_jumbo = bool(lr[5])
                 else:
-                    emoji_map.append(line[5][2])
+                    is_jumbo = self._is_jumbo_msg(line[0])
+                if is_jumbo:
+                    emoji_map.append([[*r, True] for r in emoji_ranges_this_line])
+                else:
+                    emoji_map.append(emoji_ranges_this_line)
             else:
                 emoji_map.append([])
         tui.emoji_map = emoji_map
 
     # --- App methods ---
+
+    def _is_jumbo_msg(self, msg_num):
+        """Return True if the message consists only of custom Discord emoji."""
+        if msg_num is None or msg_num < 0 or msg_num >= len(self.app.messages):
+            return False
+        raw = self.app.messages[msg_num].get("content", "") or ""
+        if not raw.strip():
+            return False
+        return (bool(re.search(r'<a?:[a-zA-Z0-9_]+:\d+>', raw))
+                and re.sub(r'<a?:[a-zA-Z0-9_]+:\d+>|\s', '', raw) == "")
 
     def _app_insert_jumbo(self):
         app = self.app
@@ -330,10 +346,12 @@ class Extension:
         i = 0
         while i < len(app.chat):
             entry = app.chat_map[i] if i < len(app.chat_map) else None
-            if (entry is not None
-                    and entry[5] is not None
-                    and len(entry[5]) > 5
-                    and entry[5][5]):
+            if entry is not None and entry[5] is not None:
+                lr = entry[5]
+                is_jumbo = (lr[5] if len(lr) > 5 else self._is_jumbo_msg(entry[0]))
+            else:
+                is_jumbo = False
+            if is_jumbo:
                 app.chat.insert(i, "")
                 app.chat_format.insert(i, [[0]])
                 app.chat_map.insert(i, None)
