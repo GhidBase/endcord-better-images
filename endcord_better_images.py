@@ -261,7 +261,10 @@ class Extension:
                 cols = min(max(4, chat_w // 2), _IMAGE_MAX_COLS)
                 aspect = (img_w / img_h) if img_h else 1.0
                 rows = max(2, round(cols / aspect / cell_aspect))
-                rows = min(rows, _IMAGE_ROWS - 1, available_rows)
+                max_rows = min(_IMAGE_ROWS - 1, available_rows)
+                if rows > max_rows:
+                    rows = max_rows
+                    cols = min(max(4, round(rows * aspect * cell_aspect)), _IMAGE_MAX_COLS)
                 parts.append(_kitty_place_str(chat_begy + img_y, chat_begx + chat_x, payload, cols=cols, rows=rows))
             for (abs_row, abs_col, emoji_id) in tui.extra_emoji_positions:
                 payload = self._ec.get_payload(emoji_id, on_ready=tui.on_image_ready)
@@ -339,7 +342,11 @@ class Extension:
                         cell_aspect = ((px[1] / th) / (px[0] / tw_term)) if (px and th and tw_term) else 2.0
                         cols = min(max(4, app.chat_dim[1] // 2), _IMAGE_MAX_COLS)
                         aspect = (img_w / img_h) if img_h else 1.0
-                        n = min(max(2, round(cols / aspect / cell_aspect)) + 1, _IMAGE_ROWS - 1)
+                        rows = max(2, round(cols / aspect / cell_aspect))
+                        if rows > _IMAGE_ROWS - 1:
+                            rows = _IMAGE_ROWS - 1
+                            cols = min(max(4, round(rows * aspect * cell_aspect)), _IMAGE_MAX_COLS)
+                        n = min(rows + 1, _IMAGE_ROWS - 1)
                     else:
                         n = _IMAGE_ROWS - 1
                     app.chat[i:i] = [""] * n
