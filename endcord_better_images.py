@@ -7,6 +7,7 @@
 
 import logging
 import os
+import re
 import sys
 import time
 
@@ -193,11 +194,12 @@ class Extension:
                         while pos < er[0] and pos < len(line):
                             screen_x += _char_w(ord(line[pos]))
                             pos += 1
-                        em_positions.append((y, screen_x, er[2], er[1] - er[0]))
+                        is_jumbo = len(er) > 3 and bool(er[3])
+                        em_positions.append((y, screen_x, er[2], er[1] - er[0], is_jumbo))
             if em_positions:
                 try:
-                    for (ey, ex, _, tw) in em_positions:
-                        tui.win_chat.addstr(ey, ex, ' ' * tw)
+                    for p in em_positions:
+                        tui.win_chat.addstr(p[0], p[1], ' ' * p[3])
                     tui.win_chat.noutrefresh()
                 except Exception:
                     pass
@@ -271,11 +273,16 @@ class Extension:
                 cell_aspect = (px[1] / th) / (px[0] / tw)
             else:
                 cell_aspect = 2.0
-            for (chat_y, chat_x, emoji_id, *_) in tui.emoji_positions:
+            jumbo_rows = 2
+            jumbo_cols = max(2, round(jumbo_rows * cell_aspect))
+            for (chat_y, chat_x, emoji_id, _tw, is_jumbo) in tui.emoji_positions:
                 payload = self._ec.get_payload(emoji_id, on_ready=tui.on_image_ready)
                 if payload is None:
                     continue
-                parts.append(_kitty_place_str(chat_begy + chat_y, chat_begx + chat_x, payload))
+                if is_jumbo and chat_y + 1 < chat_h:
+                    parts.append(_kitty_place_str(chat_begy + chat_y, chat_begx + chat_x, payload, cols=jumbo_cols, rows=jumbo_rows))
+                else:
+                    parts.append(_kitty_place_str(chat_begy + chat_y, chat_begx + chat_x, payload))
             for (chat_y, chat_x, url) in tui.image_positions:
                 img_y = chat_y + 1
                 available_rows = chat_h - img_y
@@ -315,15 +322,48 @@ class Extension:
             if line[6]:
                 tui.wide_map.append(num + 1)
             if len(line) > 5 and line[5] and len(line[5]) > 2:
-                emoji_map.append(line[5][2])
+                lr = line[5]
+                emoji_ranges = lr[2]
+                is_jumbo = lr[5] if len(lr) > 5 else self._is_jumbo_msg(line[0])
+                if is_jumbo:
+                    emoji_map.append([[*r, True] for r in emoji_ranges])
+                else:
+                    emoji_map.append(emoji_ranges)
             else:
                 emoji_map.append([])
         tui.emoji_map = emoji_map
 
     # --- App methods ---
 
+    def _is_jumbo_msg(self, msg_num):
+        """Return True if the message consists only of custom Discord emoji."""
+        if msg_num is None or msg_num < 0 or msg_num >= len(self.app.messages):
+            return False
+        raw = self.app.messages[msg_num].get("content", "") or ""
+        if not raw.strip():
+            return False
+        return (bool(re.search(r'<a?:[a-zA-Z0-9_]+:\d+>', raw))
+                and re.sub(r'<a?:[a-zA-Z0-9_]+:\d+>|\s', '', raw) == "")
+
     def _app_insert_jumbo(self):
-        pass  # emoji render at rows=1 in-line; no blank placeholders needed
+        app = self.app
+        if not app.tui.use_kitty_emoji:
+            return
+        i = 0
+        while i < len(app.chat):
+            entry = app.chat_map[i] if i < len(app.chat_map) else None
+            if entry is not None and entry[5] is not None:
+                lr = entry[5]
+                is_jumbo = lr[5] if len(lr) > 5 else self._is_jumbo_msg(entry[0])
+            else:
+                is_jumbo = False
+            if is_jumbo:
+                app.chat.insert(i, "")
+                app.chat_format.insert(i, [[0]])
+                app.chat_map.insert(i, None)
+                i += 2
+                continue
+            i += 1
 
     def _app_insert_image(self):
         app = self.app
