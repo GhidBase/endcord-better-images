@@ -2,6 +2,23 @@
 
 An [endcord](https://github.com/SparkLost/endcord) extension that renders images and custom emoji inline in the terminal using the [Kitty terminal graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
 
+## Installation
+
+Clone or copy this repository into `~/.local/share/endcord/Extensions/`:
+
+```
+~/.local/share/endcord/Extensions/endcord_better_images/
+├── endcord_better_images.py
+├── image_cache.py
+└── emoji_cache.py
+```
+
+## Requirements
+
+- A terminal that supports the Kitty graphics protocol: **Kitty**, **Ghostty**, or **WezTerm**
+- [Pillow](https://python-pillow.org/) (`pip install Pillow`) for image decoding and resizing
+- endcord 1.4.2
+
 ## Features
 
 ### Inline image attachments
@@ -21,23 +38,6 @@ When you send a message with an image attachment, the image is shown immediately
 
 ### Navigation
 Blank placeholder rows reserved for images are automatically skipped during normal j/k chat navigation.
-
-## Requirements
-
-- A terminal that supports the Kitty graphics protocol: **Kitty**, **Ghostty**, or **WezTerm**
-- [Pillow](https://python-pillow.org/) (`pip install Pillow`) for image decoding and resizing
-- endcord 1.4.2
-
-## Installation
-
-Clone or copy this repository into `~/.local/share/endcord/Extensions/`:
-
-```
-~/.local/share/endcord/Extensions/endcord_better_images/
-├── endcord_better_images.py
-├── image_cache.py
-└── emoji_cache.py
-```
 
 ## License
 
