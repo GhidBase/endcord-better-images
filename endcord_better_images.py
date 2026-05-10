@@ -181,7 +181,7 @@ class Extension:
                         y = h - 1 - num
                         if url not in best or row_offset < best[url][2]:
                             best[url] = (y, content_x, row_offset)
-                img_positions = list(best.values())
+                img_positions = [(y, x, url, ro) for url, (y, x, ro) in best.items()]
             tui.image_positions = img_positions
 
             emoji_map = tui.emoji_map
