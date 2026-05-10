@@ -49,16 +49,19 @@ def _get_pixel_size():
     return None
 
 
-def _kitty_place_str(term_row, term_col, payload_b64, cols=2, rows=1):
+def _kitty_place_str(term_row, term_col, payload_b64, cols=2, rows=1, px_y=0):
     chunk_size = 4096
     chunks = [payload_b64[i:i + chunk_size] for i in range(0, len(payload_b64), chunk_size)]
     if not chunks:
         return ""
+    opts = f"a=T,f=100,c={cols},r={rows},q=2,C=1"
+    if px_y:
+        opts += f",y={px_y}"
     out = f"\x1b[{term_row + 1};{term_col + 1}H"
     if len(chunks) == 1:
-        out += f"\x1b_Ga=T,f=100,c={cols},r={rows},q=2,C=1,m=0;{chunks[0]}\x1b\\"
+        out += f"\x1b_G{opts},m=0;{chunks[0]}\x1b\\"
     else:
-        out += f"\x1b_Ga=T,f=100,c={cols},r={rows},q=2,C=1,m=1;{chunks[0]}\x1b\\"
+        out += f"\x1b_G{opts},m=1;{chunks[0]}\x1b\\"
         for chunk in chunks[1:-1]:
             out += f"\x1b_Gm=1,q=2;{chunk}\x1b\\"
         out += f"\x1b_Gm=0,q=2;{chunks[-1]}\x1b\\"
@@ -170,10 +173,15 @@ class Extension:
             img_positions = []
             if image_map:
                 content_x = getattr(self.app.formatter, 'newline_len', 0)
+                best = {}  # url -> (y, content_x, row_offset) keeping smallest row_offset
                 for num in range(h):
                     buf_idx = tui.chat_index + num
                     if buf_idx < len(image_map) and image_map[buf_idx]:
-                        img_positions.append((h - 1 - num, content_x, image_map[buf_idx]))
+                        url, row_offset = image_map[buf_idx]
+                        y = h - 1 - num
+                        if url not in best or row_offset < best[url][2]:
+                            best[url] = (y, content_x, row_offset)
+                img_positions = list(best.values())
             tui.image_positions = img_positions
 
             emoji_map = tui.emoji_map
@@ -283,10 +291,15 @@ class Extension:
                     parts.append(_kitty_place_str(chat_begy + chat_y, chat_begx + chat_x, payload, cols=jumbo_cols, rows=jumbo_rows))
                 else:
                     parts.append(_kitty_place_str(chat_begy + chat_y, chat_begx + chat_x, payload))
-            for (chat_y, chat_x, url) in tui.image_positions:
-                img_y = chat_y + 1
+            for pos in tui.image_positions:
+                if len(pos) == 3:
+                    chat_y, chat_x, url = pos
+                    row_offset = 0
+                else:
+                    chat_y, chat_x, url, row_offset = pos
+                img_y = chat_y if row_offset else chat_y + 1
                 available_rows = chat_h - img_y
-                if available_rows < 2:
+                if available_rows < 1:
                     continue
                 result = self._ic.get_payload(url, on_ready=tui.on_image_ready)
                 if result is None:
@@ -294,12 +307,17 @@ class Extension:
                 payload, img_w, img_h = result
                 cols = min(max(4, (chat_w - chat_x) // 2), _IMAGE_MAX_COLS)
                 aspect = (img_w / img_h) if img_h else 1.0
-                rows = max(2, round(cols / aspect / cell_aspect))
-                max_rows = min(_IMAGE_ROWS - 1, available_rows)
-                if rows > max_rows:
-                    rows = max_rows
-                    cols = min(max(4, round(rows * aspect * cell_aspect)), _IMAGE_MAX_COLS)
-                parts.append(_kitty_place_str(chat_begy + img_y, chat_begx + chat_x, payload, cols=cols, rows=rows))
+                total_rows = max(2, round(cols / aspect / cell_aspect))
+                max_rows = min(_IMAGE_ROWS - 1, chat_h - 1)
+                if total_rows > max_rows:
+                    total_rows = max_rows
+                    cols = min(max(4, round(total_rows * aspect * cell_aspect)), _IMAGE_MAX_COLS)
+                rows_visible = total_rows - row_offset
+                if rows_visible < 1:
+                    continue
+                rows = min(rows_visible, available_rows)
+                px_y = round(row_offset * img_h / total_rows) if (row_offset and img_h) else 0
+                parts.append(_kitty_place_str(chat_begy + img_y, chat_begx + chat_x, payload, cols=cols, rows=rows, px_y=px_y))
             for (abs_row, abs_col, emoji_id) in tui.extra_emoji_positions:
                 payload = self._ec.get_payload(emoji_id, on_ready=tui.on_image_ready)
                 if payload is None:
@@ -422,7 +440,12 @@ class Extension:
                 continue
             attach_lines = [i for i in line_indices if " attachment]: " in app.chat[i]]
             for line_idx, url in zip(attach_lines, image_urls):
-                image_map[line_idx] = url
+                image_map[line_idx] = (url, 0)
+                for k in range(1, _IMAGE_ROWS):
+                    blank_idx = line_idx - k
+                    if blank_idx < 0 or app.chat_map[blank_idx] is not None:
+                        break
+                    image_map[blank_idx] = (url, k)
         return image_map
 
     def _app_update_chat(self, keep_selected=True, change_amount=0, select_message_index=None, scroll=True, select_unread=False, change_id=None, change_type=None):
