@@ -30,15 +30,10 @@ Blank placeholder rows reserved for images are automatically skipped during norm
 
 ## Installation
 
-Copy or symlink the three files into your endcord extensions directory:
-
-| Build | Extensions path |
-|-------|----------------|
-| Binary (`/usr/bin/endcord`) | `~/.local/share/endcord/Extensions/endcord_better_images/` |
-| Dev (`uv run main.py`) | `~/.config/endcord/Extensions/endcord_better_images/` |
+Clone or copy this repository into `~/.local/share/endcord/Extensions/`:
 
 ```
-endcord_better_images/
+~/.local/share/endcord/Extensions/endcord_better_images/
 ├── endcord_better_images.py
 ├── image_cache.py
 └── emoji_cache.py
