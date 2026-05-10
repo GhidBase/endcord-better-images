@@ -235,10 +235,14 @@ class Extension:
                 if any(x is not None for x in ids):
                     emoji_ids = ids
 
-            # Prepend 2-space indent on emoji lines to make room for the image
+            # Prepend 2-space indent on emoji lines to make room for the image.
+            # Strip any existing prefix first so re-navigation doesn't double-indent.
             if emoji_ids:
-                body = [("  " + body[i] if i < len(emoji_ids) and emoji_ids[i] is not None else body[i])
-                        for i in range(len(body))]
+                body = list(body)
+                for i in range(min(len(emoji_ids), len(body))):
+                    if emoji_ids[i] is not None:
+                        line = body[i]
+                        body[i] = "  " + (line[2:] if line.startswith("  ") else line)
 
             result = _prev_draw_extra(title, body, **kwargs)
 
