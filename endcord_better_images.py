@@ -216,6 +216,59 @@ class Extension:
             return result
         tui.draw_chat = _wrapped_draw
 
+        # Wrap draw_extra_window to show emoji images in the : autocomplete popup
+        _prev_draw_extra = tui.draw_extra_window
+        _eid_pat = re.compile(r'<a?:[a-zA-Z0-9_]+:(\d+)>')
+
+        def _wrapped_draw_extra(title, body, **kwargs):
+            # Extract emoji IDs from current assist_found results
+            emoji_ids = None
+            assist_found = getattr(self.app, 'assist_found', None)
+            if assist_found and body:
+                ids = []
+                for item in assist_found:
+                    if isinstance(item, (list, tuple)) and len(item) > 1:
+                        m = _eid_pat.match(str(item[1]))
+                        ids.append(m.group(1) if m else None)
+                    else:
+                        ids.append(None)
+                if any(x is not None for x in ids):
+                    emoji_ids = ids
+
+            # Prepend 2-space indent on emoji lines to make room for the image
+            if emoji_ids:
+                body = [("  " + body[i] if i < len(emoji_ids) and emoji_ids[i] is not None else body[i])
+                        for i in range(len(body))]
+
+            result = _prev_draw_extra(title, body, **kwargs)
+
+            if not emoji_ids:
+                tui.extra_emoji_positions = []
+                tui.need_update.set()
+                return result
+
+            try:
+                win_y, win_x = tui.win_extra_window.getbegyx()
+                win_h, _ = tui.win_extra_window.getmaxyx()
+            except Exception:
+                tui.extra_emoji_positions = []
+                return result
+
+            positions = []
+            idx_start = getattr(tui, 'extra_index', 0)
+            for row_offset in range(win_h - 1):  # -1 for title bar
+                line_num = idx_start + row_offset
+                if line_num >= len(emoji_ids):
+                    break
+                if emoji_ids[line_num] is not None:
+                    positions.append((win_y + row_offset + 1, win_x, emoji_ids[line_num]))
+
+            tui.extra_emoji_positions = positions
+            tui.need_update.set()
+            return result
+
+        tui.draw_extra_window = _wrapped_draw_extra
+
         delay = getattr(tui, 'screen_update_delay', 0.01) + 0.005
 
         def _overlay_loop():
