@@ -315,6 +315,9 @@ class Extension:
 
     def _tui_render_overlay(self):
         tui = self.app.tui
+        # Clear stale extra emoji positions when the assist window has closed
+        if tui.extra_emoji_positions and not getattr(tui, 'extra_window_body', None):
+            tui.extra_emoji_positions = []
         try:
             chat_begy, chat_begx = tui.win_chat.getbegyx()
             chat_h, chat_w = tui.win_chat.getmaxyx()
