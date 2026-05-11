@@ -212,9 +212,9 @@ class Extension:
                 except Exception:
                     pass
             tui.emoji_positions = em_positions
-            # Force overlay to re-run after every draw_chat so that cleared emoji text
-            # areas are always filled back in with images rather than left as blanks.
-            tui._last_overlay_key = None
+            # Signal that images need re-placing after this draw (curses may have
+            # overwritten them), without forcing a flash-causing delete-all.
+            tui._overlay_needs_redraw = True
 
             return result
         tui.draw_chat = _wrapped_draw
@@ -333,10 +333,16 @@ class Extension:
             tuple(tui.image_positions),
             tuple(tui.extra_emoji_positions),
         )
-        if overlay_key == tui._last_overlay_key:
+        positions_changed = overlay_key != tui._last_overlay_key
+        needs_redraw = getattr(tui, '_overlay_needs_redraw', False)
+        if not positions_changed and not needs_redraw:
             return
         tui._last_overlay_key = overlay_key
-        parts = ["\x1b_Ga=d,d=A,q=2\x1b\\"]
+        tui._overlay_needs_redraw = False
+        # Only delete all placed images when positions change (scroll, resize, etc.).
+        # For same-position redraws triggered by cursor movement, skip the delete so
+        # images are re-placed without the flash caused by clearing first.
+        parts = ["\x1b_Ga=d,d=A,q=2\x1b\\"] if positions_changed else []
         if tui.emoji_positions or tui.image_positions or tui.extra_emoji_positions:
             px = _get_pixel_size()
             th, tw = self._tu.get_size()
@@ -386,6 +392,8 @@ class Extension:
                 if payload is None:
                     continue
                 parts.append(_kitty_place_str(abs_row, abs_col, payload))
+        if not parts:
+            return
         out = "\x1b7" + "".join(parts) + "\x1b8"
         os.write(sys.stdout.fileno(), out.encode())
 
