@@ -212,6 +212,9 @@ class Extension:
                 except Exception:
                     pass
             tui.emoji_positions = em_positions
+            # Force overlay to re-run after every draw_chat so that cleared emoji text
+            # areas are always filled back in with images rather than left as blanks.
+            tui._last_overlay_key = None
 
             return result
         tui.draw_chat = _wrapped_draw
