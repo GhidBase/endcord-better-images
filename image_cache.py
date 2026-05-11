@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 _CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "endcord", "images")
 _MAX_PX = 512       # max dimension before downscaling
 _mem: dict = {}     # cache_key -> (payload_b64, width_px, height_px)
+_anim: dict = {}    # cache_key -> {"frames": [(payload, w, h), ...], "delays": [ms, ...], "index": 0}
 _pending: set = set()
 _lock = threading.Lock()
 
@@ -39,6 +40,40 @@ def _to_payload(img):
     return base64.standard_b64encode(buf.getvalue()).decode()
 
 
+def _resize(img, max_px):
+    w, h = img.size
+    if w > max_px or h > max_px:
+        from PIL import Image
+        ratio = min(max_px / w, max_px / h)
+        img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+    return img
+
+
+def _extract_frames(img):
+    """Extract all frames and delays from an animated image. Returns (frames, delays) or (None, None)."""
+    from PIL import Image
+    try:
+        n_frames = getattr(img, 'n_frames', 1)
+    except Exception:
+        n_frames = 1
+    if n_frames <= 1:
+        return None, None
+    frames = []
+    delays = []
+    for i in range(n_frames):
+        try:
+            img.seek(i)
+        except EOFError:
+            break
+        delay = img.info.get('duration', 100)
+        frame = img.convert("RGBA")
+        frame = _resize(frame, _MAX_PX)
+        w, h = frame.size
+        frames.append((_to_payload(frame), w, h))
+        delays.append(max(int(delay), 20))
+    return (frames, delays) if len(frames) > 1 else (None, None)
+
+
 def _fetch(url, key, on_ready):
     try:
         from PIL import Image
@@ -47,18 +82,25 @@ def _fetch(url, key, on_ready):
         })
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = resp.read()
-        img = Image.open(io.BytesIO(data)).convert("RGBA")
-        w, h = img.size
-        if w > _MAX_PX or h > _MAX_PX:
-            ratio = min(_MAX_PX / w, _MAX_PX / h)
-            img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
-            w, h = img.size
+        img = Image.open(io.BytesIO(data))
+        frames, delays = _extract_frames(img)
         os.makedirs(_CACHE_DIR, exist_ok=True)
-        img.save(_disk_path(key), format="PNG")
-        payload = _to_payload(img)
-        with _lock:
-            _mem[key] = (payload, w, h)
-            _pending.discard(key)
+        if frames:
+            # Animated — save first frame to disk as preview, store all frames in memory
+            img.seek(0)
+            first = _resize(img.convert("RGBA"), _MAX_PX)
+            first.save(_disk_path(key), format="PNG")
+            with _lock:
+                _anim[key] = {"frames": frames, "delays": delays, "index": 0}
+                _pending.discard(key)
+        else:
+            img = _resize(img.convert("RGBA"), _MAX_PX)
+            w, h = img.size
+            img.save(_disk_path(key), format="PNG")
+            payload = _to_payload(img)
+            with _lock:
+                _mem[key] = (payload, w, h)
+                _pending.discard(key)
         if on_ready:
             try:
                 on_ready()
@@ -74,7 +116,7 @@ def preload_local(path, on_ready=None):
     """Load a local file into the cache (used for pending upload previews)."""
     key = _cache_key(path)
     with _lock:
-        if key in _mem or key in _pending:
+        if key in _mem or key in _anim or key in _pending:
             return
         _pending.add(key)
     threading.Thread(target=_fetch_local, args=(path, key, on_ready), daemon=True).start()
@@ -83,16 +125,19 @@ def preload_local(path, on_ready=None):
 def _fetch_local(path, key, on_ready):
     try:
         from PIL import Image
-        img = Image.open(path).convert("RGBA")
-        w, h = img.size
-        if w > _MAX_PX or h > _MAX_PX:
-            ratio = min(_MAX_PX / w, _MAX_PX / h)
-            img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+        img = Image.open(path)
+        frames, delays = _extract_frames(img)
+        if frames:
+            with _lock:
+                _anim[key] = {"frames": frames, "delays": delays, "index": 0}
+                _pending.discard(key)
+        else:
+            img = _resize(img.convert("RGBA"), _MAX_PX)
             w, h = img.size
-        payload = _to_payload(img)
-        with _lock:
-            _mem[key] = (payload, w, h)
-            _pending.discard(key)
+            payload = _to_payload(img)
+            with _lock:
+                _mem[key] = (payload, w, h)
+                _pending.discard(key)
         if on_ready:
             try:
                 on_ready()
@@ -107,10 +152,14 @@ def _fetch_local(path, key, on_ready):
 def get_payload(url, on_ready=None):
     """
     Return (payload_b64, width_px, height_px) for url, or None if not ready.
-    Starts a background download on first miss; calls on_ready() when done.
+    For animated GIFs returns the current frame. Starts a background download
+    on first miss; calls on_ready() when done.
     """
     key = _cache_key(url)
     with _lock:
+        if key in _anim:
+            info = _anim[key]
+            return info["frames"][info["index"]]
         if key in _mem:
             return _mem[key]
 
@@ -131,3 +180,29 @@ def get_payload(url, on_ready=None):
             threading.Thread(target=_fetch, args=(url, key, on_ready), daemon=True).start()
 
     return None
+
+
+def is_animated(url):
+    """Return True if url is a cached animated image."""
+    key = _cache_key(url)
+    with _lock:
+        return key in _anim
+
+
+def get_frame_delay(url):
+    """Return the delay in ms for the current frame, or None if not animated."""
+    key = _cache_key(url)
+    with _lock:
+        if key in _anim:
+            info = _anim[key]
+            return info["delays"][info["index"]]
+    return None
+
+
+def advance_frame(url):
+    """Advance to the next frame of an animated image."""
+    key = _cache_key(url)
+    with _lock:
+        if key in _anim:
+            info = _anim[key]
+            info["index"] = (info["index"] + 1) % len(info["frames"])

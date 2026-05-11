@@ -120,6 +120,8 @@ class Extension:
         app.update_chat = self._app_update_chat
         app.add_pending_message = self._app_add_pending_message
         app._kitty_chat_needs_update = False
+        self._anim_urls = set()      # URLs of animated images currently visible
+        self._anim_thread_started = False
 
         logger.info("Kitty graphics extension active")
 
@@ -130,6 +132,51 @@ class Extension:
         tui._last_overlay_key = None
         self.app._kitty_chat_needs_update = True
         tui.need_update.set()
+
+    def _start_anim_thread(self):
+        """Start the animation thread that advances GIF frames and triggers redraws."""
+        if self._anim_thread_started:
+            return
+        self._anim_thread_started = True
+        import threading
+        ic = self._ic
+        ext = self
+
+        def _loop():
+            next_times = {}  # url -> monotonic time of next frame advance
+            while True:
+                now = time.monotonic()
+                urls = set(ext._anim_urls)
+
+                # Drop timers for URLs no longer visible
+                for url in list(next_times):
+                    if url not in urls:
+                        del next_times[url]
+
+                # Advance frames that are due; schedule URLs we haven't seen before
+                advanced = False
+                for url in urls:
+                    if url not in next_times or now >= next_times[url]:
+                        delay_ms = ic.get_frame_delay(url)
+                        if delay_ms is not None:
+                            ic.advance_frame(url)
+                            next_times[url] = now + delay_ms / 1000.0
+                            advanced = True
+
+                if advanced:
+                    tui = ext.app.tui
+                    # Force a full delete-and-rerender so the new frame is visible.
+                    tui._last_overlay_key = None
+                    tui._overlay_needs_redraw = True
+                    tui.need_update.set()
+
+                if next_times:
+                    sleep_time = max(0.01, min(next_times.values()) - time.monotonic())
+                else:
+                    sleep_time = 0.05
+                time.sleep(sleep_time)
+
+        threading.Thread(target=_loop, daemon=True).start()
 
     def on_main_start(self):
         """Wrap common_keybindings; start overlay thread if running in compiled binary."""
@@ -400,6 +447,8 @@ class Extension:
         # For same-position redraws triggered by cursor movement, skip the delete so
         # images are re-placed without the flash caused by clearing first.
         parts = ["\x1b_Ga=d,d=A,q=2\x1b\\"] if positions_changed else []
+        if not (tui.emoji_positions or tui.image_positions or tui.extra_emoji_positions or tui.reaction_emoji_positions):
+            self._anim_urls = set()
         if tui.emoji_positions or tui.image_positions or tui.extra_emoji_positions or tui.reaction_emoji_positions:
             px = _get_pixel_size()
             th, tw = self._tu.get_size()
@@ -417,6 +466,7 @@ class Extension:
                     parts.append(_kitty_place_str(chat_begy + chat_y, chat_begx + chat_x, payload, cols=jumbo_cols, rows=jumbo_rows))
                 else:
                     parts.append(_kitty_place_str(chat_begy + chat_y, chat_begx + chat_x, payload))
+            new_anim_urls = set()
             for pos in tui.image_positions:
                 if len(pos) == 3:
                     chat_y, chat_x, url = pos
@@ -430,6 +480,9 @@ class Extension:
                 result = self._ic.get_payload(url, on_ready=tui.on_image_ready)
                 if result is None:
                     continue
+                if self._ic.is_animated(url):
+                    new_anim_urls.add(url)
+                    self._start_anim_thread()
                 payload, img_w, img_h = result
                 cols = min(max(4, (chat_w - chat_x) // 2), _IMAGE_MAX_COLS)
                 aspect = (img_w / img_h) if img_h else 1.0
@@ -444,6 +497,7 @@ class Extension:
                 rows = min(rows_visible, available_rows)
                 px_y = round(row_offset * img_h / total_rows) if (row_offset and img_h) else 0
                 parts.append(_kitty_place_str(chat_begy + img_y, chat_begx + chat_x, payload, cols=cols, rows=rows, px_y=px_y))
+            self._anim_urls = new_anim_urls
             for (abs_row, abs_col, emoji_id) in tui.extra_emoji_positions:
                 payload = self._ec.get_payload(emoji_id, on_ready=tui.on_image_ready)
                 if payload is None:
