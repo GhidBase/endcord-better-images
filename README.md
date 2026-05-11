@@ -39,6 +39,12 @@ When you send a message with an image attachment, the image is shown immediately
 ### Navigation
 Blank placeholder rows reserved for images are automatically skipped during normal j/k chat navigation.
 
+## Changelog
+
+### 2026-05-10
+- **Fix:** Messages with multiple image attachments no longer overlap — each attachment line now uses its own image's dimensions and URL for blank-row allocation and display mapping.
+- **Fix:** Custom emoji images no longer disappear after the first chat redraw (e.g. when the Discord echo of a sent message replaces the pending message). The overlay now always re-renders after any draw cycle.
+
 ## License
 
 GPL-3.0
