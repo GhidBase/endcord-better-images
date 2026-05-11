@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 
 EXT_NAME = "Better Images"
 EXT_VERSION = "0.1.0"
@@ -105,6 +106,7 @@ class Extension:
             ('image_map', []), ('image_positions', []),
             ('emoji_positions', []), ('emoji_map', []),
             ('extra_emoji_positions', []), ('_last_overlay_key', None),
+            ('reaction_emoji_positions', []), ('reaction_emoji_map', []),
         ]:
             if not hasattr(tui, _attr):
                 setattr(tui, _attr, _default)
@@ -145,6 +147,24 @@ class Extension:
 
         if self._needs_overlay_thread:
             self._start_overlay_thread()
+        else:
+            # Dev build: wrap draw_chat to compute reaction emoji positions after each draw.
+            # (Binary build handles this inside _wrapped_draw in _start_overlay_thread.)
+            _prev_draw = tui.draw_chat
+            def _wrapped_dev_draw(*args, **kwargs):
+                result = _prev_draw(*args, **kwargs)
+                h = tui.chat_hw[0]
+                ext._compute_reaction_positions(h, tui.chat_index, tui.chat_buffer)
+                if tui.reaction_emoji_positions:
+                    try:
+                        for _y, _x, _eid, _nlen in tui.reaction_emoji_positions:
+                            tui.win_chat.addstr(_y, _x, ' ' * _nlen)
+                        tui.win_chat.noutrefresh()
+                    except Exception:
+                        pass
+                tui.need_update.set()
+                return result
+            tui.draw_chat = _wrapped_dev_draw
 
     def _start_overlay_thread(self):
         """For the compiled binary: hook need_update and run our own overlay render thread."""
@@ -212,6 +232,17 @@ class Extension:
                 except Exception:
                     pass
             tui.emoji_positions = em_positions
+
+            # Reaction emoji positions
+            self._compute_reaction_positions(h, tui.chat_index, tui.chat_buffer)
+            if tui.reaction_emoji_positions:
+                try:
+                    for _y, _x, _eid, _nlen in tui.reaction_emoji_positions:
+                        tui.win_chat.addstr(_y, _x, ' ' * _nlen)
+                    tui.win_chat.noutrefresh()
+                except Exception:
+                    pass
+
             # Signal that images need re-placing after this draw (curses may have
             # overwritten them), without forcing a flash-causing delete-all.
             tui._overlay_needs_redraw = True
@@ -289,6 +320,28 @@ class Extension:
                 self._tui_render_overlay()
         threading.Thread(target=_overlay_loop, daemon=True).start()
 
+    def _compute_reaction_positions(self, h, chat_index, chat_buffer):
+        """Compute screen positions for custom emoji in reaction lines."""
+        tui = self.app.tui
+        reaction_map = tui.reaction_emoji_map
+        positions = []
+        for num in range(h):
+            buf_idx = chat_index + num
+            if buf_idx >= len(reaction_map):
+                break
+            r_emojis = reaction_map[buf_idx]
+            if not r_emojis:
+                continue
+            y = h - 1 - num
+            line = chat_buffer[buf_idx] if buf_idx < len(chat_buffer) else ""
+            for char_pos, emoji_id, name_len in r_emojis:
+                screen_x = sum(
+                    2 if unicodedata.east_asian_width(ch) in ('W', 'F') else 1
+                    for ch in line[:char_pos]
+                )
+                positions.append((y, screen_x, emoji_id, name_len))
+        tui.reaction_emoji_positions = positions
+
     def _apply_skip(self, key):
         tui = self.app.tui
         skip = tui._kitty_skip
@@ -335,6 +388,7 @@ class Extension:
             tuple(tui.emoji_positions),
             tuple(tui.image_positions),
             tuple(tui.extra_emoji_positions),
+            tuple(tui.reaction_emoji_positions),
         )
         positions_changed = overlay_key != tui._last_overlay_key
         needs_redraw = getattr(tui, '_overlay_needs_redraw', False)
@@ -346,7 +400,7 @@ class Extension:
         # For same-position redraws triggered by cursor movement, skip the delete so
         # images are re-placed without the flash caused by clearing first.
         parts = ["\x1b_Ga=d,d=A,q=2\x1b\\"] if positions_changed else []
-        if tui.emoji_positions or tui.image_positions or tui.extra_emoji_positions:
+        if tui.emoji_positions or tui.image_positions or tui.extra_emoji_positions or tui.reaction_emoji_positions:
             px = _get_pixel_size()
             th, tw = self._tu.get_size()
             if px and th and tw:
@@ -395,6 +449,11 @@ class Extension:
                 if payload is None:
                     continue
                 parts.append(_kitty_place_str(abs_row, abs_col, payload))
+            for (chat_y, chat_x, emoji_id, _name_len) in tui.reaction_emoji_positions:
+                payload = self._ec.get_payload(emoji_id, on_ready=tui.on_image_ready)
+                if payload is None:
+                    continue
+                parts.append(_kitty_place_str(chat_begy + chat_y, chat_begx + chat_x, payload))
         if not parts:
             return
         out = "\x1b7" + "".join(parts) + "\x1b8"
@@ -406,10 +465,12 @@ class Extension:
         tui.wide_map = []
         tui._kitty_skip = set()
         emoji_map = []
+        reaction_emoji_map = []
         for num, line in enumerate(chat_map):
             if line is None:
                 tui._kitty_skip.add(num)
                 emoji_map.append([])
+                reaction_emoji_map.append([])
                 continue
             if line[6]:
                 tui.wide_map.append(num + 1)
@@ -423,7 +484,32 @@ class Extension:
                     emoji_map.append(emoji_ranges)
             else:
                 emoji_map.append([])
+            # Reaction line: entry[3] is a list of [start, end] spans
+            if isinstance(line[3], list):
+                msg_idx = line[0]
+                r_emojis = []
+                if msg_idx is not None and 0 <= msg_idx < len(self.app.messages):
+                    msg_reactions = self.app.messages[msg_idx].get("reactions", [])
+                    chat_line = self.app.chat[num] if num < len(self.app.chat) else ""
+                    for n, span in enumerate(line[3]):
+                        if n >= len(msg_reactions):
+                            break
+                        emoji_id = msg_reactions[n].get("emoji_id")
+                        if not emoji_id:
+                            continue
+                        emoji_name_str = msg_reactions[n].get("emoji", "")
+                        name_len = len(emoji_name_str)
+                        if not name_len:
+                            continue
+                        char_pos = chat_line.find(emoji_name_str, span[0])
+                        if char_pos < 0:
+                            char_pos = span[0]
+                        r_emojis.append((char_pos, emoji_id, name_len))
+                reaction_emoji_map.append(r_emojis)
+            else:
+                reaction_emoji_map.append([])
         tui.emoji_map = emoji_map
+        tui.reaction_emoji_map = reaction_emoji_map
 
     # --- App methods ---
 
