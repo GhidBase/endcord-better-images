@@ -481,7 +481,8 @@ class Extension:
                 msg_idx = entry[0]
                 if (0 <= msg_idx < len(app.messages)
                         and " attachment]: " in app.chat[i]
-                        and msg_idx in msg_image_urls):
+                        and msg_idx in msg_image_urls
+                        and not entry[2]):  # skip reply/interaction preview lines
                     urls = msg_image_urls[msg_idx]
                     seen = msg_attach_seen.get(msg_idx, 0)
                     # seen=0 → bottommost attachment → last image URL; seen=1 → second-to-last; etc.
@@ -527,7 +528,9 @@ class Extension:
             ]
             if not image_urls:
                 continue
-            attach_lines = [i for i in line_indices if " attachment]: " in app.chat[i]]
+            attach_lines = [i for i in line_indices
+                            if " attachment]: " in app.chat[i]
+                            and not (app.chat_map[i] and app.chat_map[i][2])]
             # attach_lines is ascending (bottom attachment first = last image in display order).
             # reversed(image_urls) pairs the bottom attachment with the last image URL.
             for line_idx, url in zip(attach_lines, reversed(image_urls)):
