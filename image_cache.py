@@ -74,15 +74,32 @@ def _extract_frames(img):
     return (frames, delays) if len(frames) > 1 else (None, None)
 
 
+_HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0"}
+
+
+def _open_image(data, url):
+    """Open PIL Image from bytes, with MP4→GIF fallback for Tenor/Giphy URLs."""
+    from PIL import Image
+    try:
+        return Image.open(io.BytesIO(data)), data
+    except Exception:
+        # Tenor/Giphy gifv embeds expose MP4 URLs; try the GIF equivalent instead
+        if url.endswith(".mp4"):
+            gif_url = url[:-4] + ".gif"
+            req = urllib.request.Request(gif_url, headers=_HEADERS)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                gif_data = resp.read()
+            return Image.open(io.BytesIO(gif_data)), gif_data
+        raise
+
+
 def _fetch(url, key, on_ready):
     try:
         from PIL import Image
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0"
-        })
+        req = urllib.request.Request(url, headers=_HEADERS)
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = resp.read()
-        img = Image.open(io.BytesIO(data))
+        img, data = _open_image(data, url)
         frames, delays = _extract_frames(img)
         os.makedirs(_CACHE_DIR, exist_ok=True)
         if frames:

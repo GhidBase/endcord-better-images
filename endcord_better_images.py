@@ -69,6 +69,27 @@ def _kitty_place_str(term_row, term_col, payload_b64, cols=2, rows=1, px_y=0):
     return out
 
 
+def _is_renderable_embed(e):
+    """True if embed e should be rendered as an inline image."""
+    if "main_url" not in e and e.get("type", "").startswith("image"):
+        return True  # image/gif/etc. attachment
+    if e.get("type") == "gifv" and e.get("main_url"):
+        return True  # Tenor/Giphy gifv URL-unfurl embed
+    return False
+
+
+def _embed_render_url(e):
+    """Return the URL to fetch for rendering embed e."""
+    if e.get("type") == "gifv":
+        return e["main_url"]
+    return e["url"]
+
+
+def _is_image_line(text):
+    """True if a chat line represents an image/gifv embed that should get placeholder rows."""
+    return " attachment]: " in text or "[gifv embed]: " in text
+
+
 class Extension:
     def __init__(self, app):
         self.app = app
@@ -605,8 +626,8 @@ class Extension:
         # Pre-compute image URL list per message (embed order = top-to-bottom display order).
         msg_image_urls = {}
         for msg_idx, msg in enumerate(app.messages):
-            urls = [e["url"] for e in msg.get("embeds", [])
-                    if "main_url" not in e and e.get("type", "").startswith("image")]
+            urls = [_embed_render_url(e) for e in msg.get("embeds", [])
+                    if _is_renderable_embed(e)]
             if urls:
                 msg_image_urls[msg_idx] = urls
 
@@ -620,7 +641,7 @@ class Extension:
             if entry is not None and entry[0] is not None:
                 msg_idx = entry[0]
                 if (0 <= msg_idx < len(app.messages)
-                        and " attachment]: " in app.chat[i]
+                        and _is_image_line(app.chat[i])
                         and msg_idx in msg_image_urls
                         and not entry[2]):  # skip reply/interaction preview lines
                     urls = msg_image_urls[msg_idx]
@@ -662,14 +683,12 @@ class Extension:
         for msg_idx, line_indices in msg_to_lines.items():
             if msg_idx < 0 or msg_idx >= len(app.messages):
                 continue
-            image_urls = [
-                embed["url"] for embed in app.messages[msg_idx].get("embeds", [])
-                if "main_url" not in embed and embed.get("type", "").startswith("image")
-            ]
+            image_urls = [_embed_render_url(e) for e in app.messages[msg_idx].get("embeds", [])
+                          if _is_renderable_embed(e)]
             if not image_urls:
                 continue
             attach_lines = [i for i in line_indices
-                            if " attachment]: " in app.chat[i]
+                            if _is_image_line(app.chat[i])
                             and not (app.chat_map[i] and app.chat_map[i][2])]
             # attach_lines is ascending (bottom attachment first = last image in display order).
             # reversed(image_urls) pairs the bottom attachment with the last image URL.
