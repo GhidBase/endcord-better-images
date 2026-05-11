@@ -215,6 +215,9 @@ class Extension:
             # Signal that images need re-placing after this draw (curses may have
             # overwritten them), without forcing a flash-causing delete-all.
             tui._overlay_needs_redraw = True
+            # Always wake the overlay thread — draw_chat doesn't guarantee
+            # need_update.set() is called (e.g. on channel open, resize, scroll).
+            tui.need_update.set()
 
             return result
         tui.draw_chat = _wrapped_draw
