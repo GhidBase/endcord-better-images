@@ -447,6 +447,19 @@ class Extension:
         app = self.app
         if not app.tui.use_kitty_emoji:
             return
+
+        # Pre-compute image URL list per message (embed order = top-to-bottom display order).
+        msg_image_urls = {}
+        for msg_idx, msg in enumerate(app.messages):
+            urls = [e["url"] for e in msg.get("embeds", [])
+                    if "main_url" not in e and e.get("type", "").startswith("image")]
+            if urls:
+                msg_image_urls[msg_idx] = urls
+
+        # Buffer index 0 = bottom of screen = newest. Iterating upward means we see
+        # attachment lines in reverse display order (bottom attachment first = last image first).
+        msg_attach_seen = {}  # msg_idx -> count of attachment lines processed so far
+
         i = 0
         while i < len(app.chat):
             entry = app.chat_map[i] if i < len(app.chat_map) else None
@@ -454,13 +467,15 @@ class Extension:
                 msg_idx = entry[0]
                 if (0 <= msg_idx < len(app.messages)
                         and " attachment]: " in app.chat[i]
-                        and any("main_url" not in e and e.get("type", "").startswith("image")
-                                for e in app.messages[msg_idx].get("embeds", []))):
-                    img_url = next((
-                        e["url"] for e in app.messages[msg_idx].get("embeds", [])
-                        if "main_url" not in e and e.get("type", "").startswith("image")
-                    ), None)
-                    cached = self._ic.get_payload(img_url, on_ready=app.tui.on_image_ready) if img_url else None
+                        and msg_idx in msg_image_urls):
+                    urls = msg_image_urls[msg_idx]
+                    seen = msg_attach_seen.get(msg_idx, 0)
+                    # seen=0 → bottommost attachment → last image URL; seen=1 → second-to-last; etc.
+                    url_idx = len(urls) - 1 - seen
+                    img_url = urls[max(0, url_idx)]
+                    msg_attach_seen[msg_idx] = seen + 1
+
+                    cached = self._ic.get_payload(img_url, on_ready=app.tui.on_image_ready)
                     if cached:
                         _, img_w, img_h = cached
                         px = _get_pixel_size()
@@ -499,7 +514,9 @@ class Extension:
             if not image_urls:
                 continue
             attach_lines = [i for i in line_indices if " attachment]: " in app.chat[i]]
-            for line_idx, url in zip(attach_lines, image_urls):
+            # attach_lines is ascending (bottom attachment first = last image in display order).
+            # reversed(image_urls) pairs the bottom attachment with the last image URL.
+            for line_idx, url in zip(attach_lines, reversed(image_urls)):
                 image_map[line_idx] = (url, 0)
                 for k in range(1, _IMAGE_ROWS):
                     blank_idx = line_idx - k
