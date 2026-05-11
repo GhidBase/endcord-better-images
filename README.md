@@ -4,10 +4,10 @@ An [endcord](https://github.com/SparkLost/endcord) extension that renders images
 
 ## Installation
 
-Clone or copy this repository into `~/.local/share/endcord/Extensions/`:
+Clone or copy this repository into `~/.config/endcord/Extensions/`:
 
 ```
-~/.local/share/endcord/Extensions/endcord_better_images/
+~/.config/endcord/Extensions/endcord_better_images/
 ├── endcord_better_images.py
 ├── image_cache.py
 └── emoji_cache.py
